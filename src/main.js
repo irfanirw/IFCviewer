@@ -112,7 +112,7 @@ const boot = async () => {
 
   world.scene = new OBC.SimpleScene(components);
   world.scene.setup();
-  world.scene.config.backgroundColor = new THREE.Color("#f4f7fb");
+  world.scene.config.backgroundColor = new THREE.Color("#282a36");
 
   world.renderer = new OBC.SimpleRenderer(components, viewer);
   world.camera = new OBC.OrthoPerspectiveCamera(components);
