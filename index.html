@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>That Open IFC Viewer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Unbounded:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">That Open Engine</p>
+          <h1>IFC Viewer</h1>
+          <p class="lede">
+            Drop an IFC file to explore it with That Open Company&#39;s 3D engine.
+          </p>
+        </div>
+        <div class="controls">
+          <label class="file-pill" for="ifc-input">
+            <span>Choose IFC</span>
+            <input id="ifc-input" type="file" accept=".ifc" />
+          </label>
+          <button id="reset-camera" class="ghost">Reset Camera</button>
+        </div>
+      </header>
+      <main class="viewer-shell">
+        <div id="viewer"></div>
+        <div id="status" class="status">Drop an IFC file to begin.</div>
+        <div id="debug" class="debug-panel">
+          <div class="debug-title">Debug</div>
+          <div class="debug-row"><span>Schema</span><strong id="debug-schema">-</strong></div>
+          <div class="debug-row"><span>Model</span><strong id="debug-model">-</strong></div>
+          <div class="debug-row"><span>Last Error</span><strong id="debug-error">-</strong></div>
+        </div>
+        <aside id="properties-panel" class="properties-panel">
+          <div class="properties-header">
+            <span id="properties-title">IFC Properties</span>
+            <button id="properties-clear" class="properties-clear">Clear</button>
+          </div>
+          <pre id="properties-content" class="properties-content">
+Click an element to view properties.
+          </pre>
+        </aside>
+      </main>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
