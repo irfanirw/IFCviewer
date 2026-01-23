@@ -29,6 +29,35 @@ const loadingProgress = document.getElementById("loading-progress");
 let currentModel = null;
 let currentHighlightedItem = null; // Track currently highlighted item
 let fragmentsManager = null; // Store fragments manager globally
+let isLoadingIfc = false;
+
+const disposeMaterial = (material) => {
+  if (!material) return;
+  if (Array.isArray(material)) {
+    material.forEach(disposeMaterial);
+    return;
+  }
+  if (material.map) material.map.dispose?.();
+  if (material.lightMap) material.lightMap.dispose?.();
+  if (material.aoMap) material.aoMap.dispose?.();
+  if (material.emissiveMap) material.emissiveMap.dispose?.();
+  if (material.bumpMap) material.bumpMap.dispose?.();
+  if (material.normalMap) material.normalMap.dispose?.();
+  if (material.displacementMap) material.displacementMap.dispose?.();
+  if (material.roughnessMap) material.roughnessMap.dispose?.();
+  if (material.metalnessMap) material.metalnessMap.dispose?.();
+  if (material.alphaMap) material.alphaMap.dispose?.();
+  if (material.envMap) material.envMap.dispose?.();
+  material.dispose?.();
+};
+
+const disposeObject3D = (object) => {
+  if (!object) return;
+  object.traverse((child) => {
+    if (child.geometry) child.geometry.dispose?.();
+    if (child.material) disposeMaterial(child.material);
+  });
+};
 
 const setStatus = (text) => {
   if (statusEl) {
@@ -709,32 +738,84 @@ const boot = async () => {
     },
   });
 
+  const resetViewerForNewModel = async () => {
+    await clearSelectionHighlight();
+
+    if (currentModel?.object) {
+      world.scene.three.remove(currentModel.object);
+      disposeObject3D(currentModel.object);
+    }
+
+    if (currentModel?.dispose) {
+      try {
+        await currentModel.dispose();
+      } catch (e) {
+        console.warn("Failed to dispose current model:", e);
+      }
+    }
+
+    if (fragmentsManager?.list && currentModel?.id !== undefined) {
+      try {
+        if (typeof fragmentsManager.list.remove === "function") {
+          fragmentsManager.list.remove(currentModel.id);
+        } else if (typeof fragmentsManager.list.delete === "function") {
+          fragmentsManager.list.delete(currentModel.id);
+        }
+      } catch (e) {
+        console.warn("Failed to remove current model from fragments list:", e);
+      }
+    } else if (fragmentsManager?.list && typeof fragmentsManager.list.clear === "function") {
+      try {
+        fragmentsManager.list.clear();
+      } catch (e) {
+        console.warn("Failed to clear fragments list:", e);
+      }
+    }
+
+    currentModel = null;
+
+    setObjectTreeMessage("No model loaded.");
+    if (objectTreeContent) objectTreeContent.innerHTML = "";
+    setPropertiesMessage("Click an element to view properties.");
+
+    if (fragmentsManager?.core) {
+      await fragmentsManager.core.update(true);
+    }
+  };
+
   const loadIfcFromFile = async (file) => {
+    if (isLoadingIfc) return;
+    isLoadingIfc = true;
     if (debugError) debugError.textContent = "-";
     if (statusEl) statusEl.classList.remove("status--error");
     if (debugModel) debugModel.textContent = "loading";
     showLoadingBar();
-    const buffer = await file.arrayBuffer();
-    const schema = inferSchema(buffer);
-    if (debugSchema) debugSchema.textContent = schema;
-    setStatus(`Loading ${file.name} (${schema})...`);
-    const data = new Uint8Array(buffer);
-    await ifcLoader.load(data, false, file.name, {
-      processData: {
-        progressCallback: (progress) => {
-          updateLoadingProgress(progress);
-          setStatus(`Loading ${file.name} (${schema}) ${Math.round(progress)}%`);
+    try {
+      await resetViewerForNewModel();
+      const buffer = await file.arrayBuffer();
+      const schema = inferSchema(buffer);
+      if (debugSchema) debugSchema.textContent = schema;
+      setStatus(`Loading ${file.name} (${schema})...`);
+      const data = new Uint8Array(buffer);
+      await ifcLoader.load(data, false, file.name, {
+        processData: {
+          progressCallback: (progress) => {
+            updateLoadingProgress(progress);
+            setStatus(`Loading ${file.name} (${schema}) ${Math.round(progress)}%`);
+          },
         },
-      },
-    });
-    hideLoadingBar();
-    if (debugModel) debugModel.textContent = "loaded";
-    setStatus(`Loaded ${file.name} (${schema}).`);
-    if (currentModel) {
-      await colorizeCategories(currentModel);
-      if (fragmentsManager && fragmentsManager.core) {
-        await fragmentsManager.core.update(true);
+      });
+      if (debugModel) debugModel.textContent = "loaded";
+      setStatus(`Loaded ${file.name} (${schema}).`);
+      if (currentModel) {
+        await colorizeCategories(currentModel);
+        if (fragmentsManager && fragmentsManager.core) {
+          await fragmentsManager.core.update(true);
+        }
       }
+    } finally {
+      hideLoadingBar();
+      isLoadingIfc = false;
     }
   };
 
