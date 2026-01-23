@@ -739,6 +739,7 @@ const boot = async () => {
   });
 
   const resetViewerForNewModel = async () => {
+    if (!currentModel) return;
     await clearSelectionHighlight();
 
     if (currentModel?.object) {
@@ -763,12 +764,6 @@ const boot = async () => {
         }
       } catch (e) {
         console.warn("Failed to remove current model from fragments list:", e);
-      }
-    } else if (fragmentsManager?.list && typeof fragmentsManager.list.clear === "function") {
-      try {
-        fragmentsManager.list.clear();
-      } catch (e) {
-        console.warn("Failed to clear fragments list:", e);
       }
     }
 
