@@ -96,7 +96,8 @@ const hideLoadingBar = () => {
 };
 
 const updateLoadingProgress = (progress) => {
-  const percentage = Math.round(progress);
+  const normalized = progress <= 1 ? progress * 100 : progress;
+  const percentage = Math.round(normalized);
   if (loadingPercentage) {
     loadingPercentage.textContent = `${percentage}%`;
   }
@@ -744,23 +745,15 @@ const boot = async () => {
 
     if (currentModel?.object) {
       world.scene.three.remove(currentModel.object);
-      disposeObject3D(currentModel.object);
     }
 
-    if (currentModel?.dispose) {
-      try {
-        await currentModel.dispose();
-      } catch (e) {
-        console.warn("Failed to dispose current model:", e);
-      }
-    }
-
-    if (fragmentsManager?.list && currentModel?.id !== undefined) {
+    const modelId = currentModel?.modelId ?? currentModel?.id;
+    if (fragmentsManager?.list && modelId !== undefined) {
       try {
         if (typeof fragmentsManager.list.remove === "function") {
-          fragmentsManager.list.remove(currentModel.id);
+          fragmentsManager.list.remove(modelId);
         } else if (typeof fragmentsManager.list.delete === "function") {
-          fragmentsManager.list.delete(currentModel.id);
+          fragmentsManager.list.delete(modelId);
         }
       } catch (e) {
         console.warn("Failed to remove current model from fragments list:", e);
