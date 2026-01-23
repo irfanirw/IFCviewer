@@ -14,6 +14,17 @@
 </head>
 
 <body>
+  <div id="loading-bar" class="loading-bar" style="display: none;">
+    <div class="loading-bar-content">
+      <div class="loading-bar-header">
+        <span class="loading-bar-title">Loading IFC File</span>
+        <span id="loading-percentage" class="loading-percentage">0%</span>
+      </div>
+      <div class="loading-bar-track">
+        <div id="loading-progress" class="loading-bar-fill"></div>
+      </div>
+    </div>
+  </div>
   <div class="page">
     <header class="hero">
       <div>
@@ -33,17 +44,6 @@
     </header>
     <main class="viewer-shell">
       <div id="viewer"></div>
-      <div id="loading-bar" class="loading-bar" style="display: none;">
-        <div class="loading-bar-content">
-          <div class="loading-bar-header">
-            <span class="loading-bar-title">Loading IFC File</span>
-            <span id="loading-percentage" class="loading-percentage">0%</span>
-          </div>
-          <div class="loading-bar-track">
-            <div id="loading-progress" class="loading-bar-fill"></div>
-          </div>
-        </div>
-      </div>
       <div id="status" class="status">Drop an IFC file to begin.</div>
       <div id="debug" class="debug-panel">
         <div class="debug-title">Debug</div>
@@ -81,6 +81,26 @@
       <button id="objecttree-show" class="objecttree-show" style="display: none;" title="Show Object Tree">
         <span>Object Tree</span>
       </button>
+      <div id="dock" class="dock">
+        <div class="dock-container">
+          <button class="dock-item" title="Feature 1" data-feature="feature1">
+            <span>⚙️</span>
+          </button>
+          <button class="dock-item" title="Feature 2" data-feature="feature2">
+            <span>📊</span>
+          </button>
+          <button class="dock-item" title="Feature 3" data-feature="feature3">
+            <span>🎨</span>
+          </button>
+          <button class="dock-item" title="Feature 4" data-feature="feature4">
+            <span>📐</span>
+          </button>
+          <div class="dock-separator"></div>
+          <button class="dock-item" title="Help" data-feature="help">
+            <span>❓</span>
+          </button>
+        </div>
+      </div>
     </main>
   </div>
   <script type="module" src="/src/main.js"></script>

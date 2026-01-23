@@ -160,53 +160,42 @@ const createPropertiesTable = (data) => {
 };
 
 const reapplyCategoryHighlights = async (model) => {
-  if (!model || typeof model.getCategories !== "function" || typeof model.highlight !== "function") return;
+  // Reapply light grey color instead of category colors
+  if (!model || typeof model.getAllIds !== "function" || typeof model.highlight !== "function") return;
 
   try {
-    const categories = await model.getCategories();
-    for (const category of categories) {
-      const regex = new RegExp(`^${category}$`);
-      const items = await model.getItemsOfCategories([regex]);
-      const localIds = Object.values(items).flat();
-      if (localIds.length === 0) continue;
-      await model.highlight(localIds, {
-        customId: `category-${category}`,
-        color: new THREE.Color(colorForCategory(category)),
-        renderedFaces: FRAGS.RenderedFaces.ALL,
-        opacity: 1,
-        transparent: false,
-      });
-    }
+    const allIds = await model.getAllIds();
+    if (allIds.length === 0) return;
+
+    await model.highlight(allIds, {
+      customId: "default-grey",
+      color: new THREE.Color("#FFFFFF"), // white
+      renderedFaces: FRAGS.RenderedFaces.ALL,
+      opacity: 1,
+      transparent: false,
+    });
   } catch (e) {
-    console.warn("Failed to reapply category highlights:", e);
+    console.warn("Failed to reapply default color:", e);
   }
 };
 
 const colorizeCategories = async (model) => {
-  if (!model || typeof model.getCategories !== "function" || typeof model.highlight !== "function") return;
+  // Category colors deactivated - apply light grey to all objects
+  if (!model || typeof model.getAllIds !== "function" || typeof model.highlight !== "function") return;
 
   try {
-    const categories = await model.getCategories();
-    for (const category of categories) {
-      const regex = new RegExp(`^${category}$`);
-      const items = await model.getItemsOfCategories([regex]);
-      const localIds = Object.values(items).flat();
-      if (localIds.length === 0) continue;
+    const allIds = await model.getAllIds();
+    if (allIds.length === 0) return;
 
-      try {
-        await model.highlight(localIds, {
-          customId: `category-${category}`,
-          color: new THREE.Color(colorForCategory(category)),
-          renderedFaces: FRAGS.RenderedFaces.ALL,
-          opacity: 1,
-          transparent: false,
-        });
-      } catch (highlightError) {
-        console.warn(`Failed to highlight category ${category}:`, highlightError);
-      }
-    }
+    await model.highlight(allIds, {
+      customId: "default-grey",
+      color: new THREE.Color("#FFFFFF"), // white
+      renderedFaces: FRAGS.RenderedFaces.ALL,
+      opacity: 1,
+      transparent: false,
+    });
   } catch (error) {
-    console.error(`Failed to colorize categories: ${error.message || error}`);
+    console.error(`Failed to apply default color: ${error.message || error}`);
   }
 };
 
@@ -226,6 +215,7 @@ const clearSelectionHighlight = async () => {
   const { model, localId } = currentHighlightedItem;
 
   try {
+    // Clear the selection highlights
     if (typeof model.clearHighlight === "function") {
       try {
         await model.clearHighlight(selectionFillId);
@@ -243,7 +233,21 @@ const clearSelectionHighlight = async () => {
       }
     }
 
-    await reapplyCategoryHighlights(model);
+    // Reapply grey color to the previously selected item
+    if (typeof model.highlight === "function") {
+      try {
+        // Reapply white to the deselected item
+        await model.highlight([localId], {
+          customId: "default-grey",
+          color: new THREE.Color("#FFFFFF"),
+          renderedFaces: FRAGS.RenderedFaces.ALL,
+          opacity: 1,
+          transparent: false,
+        });
+      } catch (e) {
+        console.warn("Failed to reapply default appearance to deselected item:", e);
+      }
+    }
   } catch (e) {
     console.warn("Failed to clear previous highlight:", e);
   }
@@ -261,31 +265,29 @@ const highlightSelectedItem = async (model, localId, category = null) => {
   if (!model || localId === undefined || typeof model.highlight !== "function") return;
 
   try {
-    if (category && typeof model.removeHighlight === "function") {
+    // Remove default grey from selected item
+    if (typeof model.removeHighlight === "function") {
       try {
-        await model.removeHighlight([localId], `category-${category}`);
+        await model.removeHighlight([localId], "default-grey");
       } catch (removeError) {
         // Ignore if removal fails
       }
     }
 
+    // Apply fill highlight with emissive properties
     await model.highlight([localId], {
       customId: selectionFillId,
       color: selectionFillColor,
+      emissive: selectionFillColor,
+      emissiveIntensity: 3,
       renderedFaces: FRAGS.RenderedFaces.ALL,
       opacity: 1,
       transparent: false,
-      stroke: 0,
+      depthTest: true,
+      depthWrite: true,
     });
 
-    await model.highlight([localId], {
-      customId: selectionWireId,
-      color: selectionWireColor,
-      renderedFaces: selectionRenderedFaces,
-      opacity: 0,
-      transparent: true,
-      stroke: 10,
-    });
+    // Solid light blue selection
     currentHighlightedItem = { model, localId, category };
 
     if (fragmentsManager && fragmentsManager.core) {
@@ -533,21 +535,21 @@ const inferSchema = (buffer) => {
 };
 
 const categoryPalette = [
-  "#e76f51",
-  "#f4a261",
-  "#e9c46a",
-  "#2a9d8f",
-  "#264653",
-  "#5a4fcf",
-  "#3a86ff",
-  "#219ebc",
-  "#8ecae6",
-  "#ffb703",
-  "#fb8500",
-  "#ef476f",
-  "#06d6a0",
-  "#118ab2",
-  "#073b4c",
+  "#FFB3BA", // pastel red
+  "#FFDFBA", // pastel orange
+  "#FFFFBA", // pastel yellow
+  "#BAFFC9", // pastel green
+  "#BAE1FF", // pastel blue
+  "#E7BAFF", // pastel purple
+  "#FFBAF3", // pastel pink
+  "#FFD4BA", // pastel peach
+  "#C9BAFF", // pastel lavender
+  "#BAFFF0", // pastel mint
+  "#FFE5BA", // pastel cream
+  "#FFBAD4", // pastel rose
+  "#BAFFE7", // pastel aqua
+  "#D4BAFF", // pastel violet
+  "#FFCCE5", // pastel magenta
 ];
 
 const hashString = (value) => {
@@ -600,7 +602,7 @@ const boot = async () => {
 
   world.scene = new OBC.SimpleScene(components);
   world.scene.setup();
-  world.scene.config.backgroundColor = new THREE.Color("#282a36");
+  world.scene.config.backgroundColor = new THREE.Color("#1a1a1a");
 
   world.renderer = new OBC.SimpleRenderer(components, viewer);
   world.camera = new OBC.OrthoPerspectiveCamera(components);
@@ -847,6 +849,29 @@ const boot = async () => {
   if (debugModel) debugModel.textContent = "idle";
   if (!propertiesPanel) {
     setPropertiesMessage("Click an element to view properties.");
+  }
+
+  // Dock initialization
+  const dock = document.getElementById("dock");
+  const dockItems = document.querySelectorAll(".dock-item");
+
+  dockItems.forEach((item) => {
+    item.addEventListener("click", () => {
+      const feature = item.getAttribute("data-feature");
+      console.log(`Feature clicked: ${feature}`);
+      // Add feature handlers here in the future
+    });
+  });
+
+  // Show dock on hover, hide after mouse leaves
+  if (dock) {
+    dock.addEventListener("mouseenter", () => {
+      dock.classList.add("visible");
+    });
+
+    dock.addEventListener("mouseleave", () => {
+      dock.classList.remove("visible");
+    });
   }
 };
 
