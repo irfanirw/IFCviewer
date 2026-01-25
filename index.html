@@ -44,6 +44,7 @@
     </header>
     <main class="viewer-shell">
       <div id="viewer"></div>
+      <div id="axis-helper" class="axis-helper" aria-hidden="true"></div>
       <div id="status" class="status">Drop an IFC file to begin.</div>
       <div id="debug" class="debug-panel">
         <div class="debug-title">Debug</div>
@@ -51,6 +52,13 @@
         <div class="debug-row"><span>Model</span><strong id="debug-model">-</strong></div>
         <div class="debug-row"><span>Last Error</span><strong id="debug-error">-</strong></div>
       </div>
+      <aside id="log-panel" class="log-panel">
+        <div class="log-header">
+          <span>Log</span>
+          <button id="log-clear" class="log-clear">Clear</button>
+        </div>
+        <div id="log-content" class="log-content"></div>
+      </aside>
       <aside id="properties-panel" class="properties-panel">
         <div class="properties-header">
           <span id="properties-title">IFC Properties</span>
