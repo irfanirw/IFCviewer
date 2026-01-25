@@ -831,3 +831,19 @@ h1 {
     max-height: none;
   }
 }
+
+/* Axis Helper */
+.axis-helper {
+  position: fixed;
+  bottom: 96px;
+  left: 24px;
+  width: 100px;
+  height: 100px;
+  pointer-events: none;
+  z-index: 50;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--stroke);
+  background: rgba(40, 42, 54, 0.6);
+  backdrop-filter: blur(8px);
+}
