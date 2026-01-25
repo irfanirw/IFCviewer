@@ -24,12 +24,36 @@ const objectTreeShow = document.getElementById("objecttree-show");
 const loadingBar = document.getElementById("loading-bar");
 const loadingPercentage = document.getElementById("loading-percentage");
 const loadingProgress = document.getElementById("loading-progress");
+const logPanel = document.getElementById("log-panel");
+const logContent = document.getElementById("log-content");
+const logClear = document.getElementById("log-clear");
 
 // Store current model globally
 let currentModel = null;
 let currentHighlightedItem = null; // Track currently highlighted item
 let fragmentsManager = null; // Store fragments manager globally
 let isLoadingIfc = false;
+let loadToken = 0;
+
+const appendLogEntry = (message, level = "info") => {
+  if (!logContent) return;
+  const entry = document.createElement("div");
+  entry.className = "log-entry";
+  entry.dataset.level = level;
+  const time = document.createElement("time");
+  const now = new Date();
+  time.textContent = now.toLocaleTimeString();
+  const text = document.createElement("span");
+  text.textContent = message;
+  entry.appendChild(time);
+  entry.appendChild(text);
+  logContent.appendChild(entry);
+  logContent.scrollTop = logContent.scrollHeight;
+};
+
+const logInfo = (message) => appendLogEntry(message, "info");
+const logWarn = (message) => appendLogEntry(message, "warn");
+const logError = (message) => appendLogEntry(message, "error");
 
 const disposeMaterial = (material) => {
   if (!material) return;
@@ -72,6 +96,7 @@ const showError = (text) => {
     statusEl.classList.add("status--error");
   }
   if (debugError) debugError.textContent = text;
+  logError(text);
 };
 
 const setPropertiesMessage = (text) => {
@@ -95,9 +120,13 @@ const hideLoadingBar = () => {
   if (loadingProgress) loadingProgress.style.width = "0%";
 };
 
+const normalizeProgress = (progress) => {
+  const value = progress <= 1 ? progress * 100 : progress;
+  return Math.min(100, Math.max(0, value));
+};
+
 const updateLoadingProgress = (progress) => {
-  const normalized = progress <= 1 ? progress * 100 : progress;
-  const percentage = Math.round(normalized);
+  const percentage = Math.round(normalizeProgress(progress));
   if (loadingPercentage) {
     loadingPercentage.textContent = `${percentage}%`;
   }
@@ -651,6 +680,8 @@ const boot = async () => {
   });
 
   fragments.list.onItemSet.add(({ value: model }) => {
+    logInfo("Model added to fragments list.");
+
     // Store the current model globally
     currentModel = model;
 
@@ -662,11 +693,13 @@ const boot = async () => {
     // Build object tree
     buildObjectTree(model).catch(error => {
       console.error("Failed to build object tree:", error);
+      logWarn("Object tree build failed. Check console for details.");
     });
 
     void (async () => {
       if (typeof model.highlight !== "function") {
         console.warn("Model does not have highlight method, skipping colorization");
+        logWarn("Model highlight not available; skipping colorization.");
         return;
       }
 
@@ -731,77 +764,329 @@ const boot = async () => {
   };
 
   const ifcLoader = components.get(OBC.IfcLoader);
-  await ifcLoader.setup({
-    autoSetWasm: false,
-    wasm: {
-      path: "/web-ifc/",
-      absolute: true,
-    },
-  });
+  try {
+    await ifcLoader.setup({
+      autoSetWasm: false,
+      wasm: {
+        path: "/web-ifc/",
+        absolute: true,
+      },
+      worker: {
+        path: "/web-ifc/web-ifc-mt.worker.js",
+        absolute: true,
+      },
+    });
+    logInfo("IFC loader initialized.");
+  } catch (error) {
+    logError(`IFC loader setup failed: ${error.message || error}`);
+    throw error;
+  }
 
   const resetViewerForNewModel = async () => {
-    if (!currentModel) return;
     await clearSelectionHighlight();
 
-    if (currentModel?.object) {
-      world.scene.three.remove(currentModel.object);
-    }
-
-    const modelId = currentModel?.modelId ?? currentModel?.id;
-    if (fragmentsManager?.list && modelId !== undefined) {
+    // Clear all models from fragments list
+    if (fragmentsManager?.list) {
       try {
-        if (typeof fragmentsManager.list.remove === "function") {
-          fragmentsManager.list.remove(modelId);
-        } else if (typeof fragmentsManager.list.delete === "function") {
-          fragmentsManager.list.delete(modelId);
+        // Get all model IDs and remove them
+        const modelIds = Array.from(fragmentsManager.list.ids || []);
+        for (const modelId of modelIds) {
+          const model = fragmentsManager.list.get(modelId);
+          if (model?.object) {
+            disposeObject3D(model.object);
+            world.scene.three.remove(model.object);
+          }
+          if (typeof fragmentsManager.list.delete === "function") {
+            fragmentsManager.list.delete(modelId);
+          }
         }
       } catch (e) {
-        console.warn("Failed to remove current model from fragments list:", e);
+        console.warn("Failed to clear fragments list:", e);
+      }
+    }
+
+    // Also remove current model if it exists
+    if (currentModel?.object) {
+      disposeObject3D(currentModel.object);
+      world.scene.three.remove(currentModel.object);
+      if (typeof currentModel.dispose === "function") {
+        try {
+          currentModel.dispose();
+        } catch (e) {
+          console.warn("Failed to dispose current model:", e);
+        }
       }
     }
 
     currentModel = null;
 
+    // Clear UI
     setObjectTreeMessage("No model loaded.");
     if (objectTreeContent) objectTreeContent.innerHTML = "";
     setPropertiesMessage("Click an element to view properties.");
 
     if (fragmentsManager?.core) {
-      await fragmentsManager.core.update(true);
+      try {
+        void fragmentsManager.core.update(true);
+      } catch (error) {
+        console.warn("Failed to update fragments core:", error);
+      }
     }
   };
 
   const loadIfcFromFile = async (file) => {
     if (isLoadingIfc) return;
     isLoadingIfc = true;
+    loadToken += 1;
+    const currentToken = loadToken;
     if (debugError) debugError.textContent = "-";
     if (statusEl) statusEl.classList.remove("status--error");
     if (debugModel) debugModel.textContent = "loading";
     showLoadingBar();
     try {
-      await resetViewerForNewModel();
-      const buffer = await file.arrayBuffer();
+      logInfo(`Loading ${file.name}...`);
+
+      const withTimeout = (promise, timeoutMs, label) =>
+        new Promise((resolve, reject) => {
+          const timer = setTimeout(() => {
+            reject(new Error(`${label} timed out.`));
+          }, timeoutMs);
+          promise
+            .then((result) => {
+              clearTimeout(timer);
+              resolve(result);
+            })
+            .catch((error) => {
+              clearTimeout(timer);
+              reject(error);
+            });
+        });
+
+      logInfo("Resetting viewer...");
+      await withTimeout(resetViewerForNewModel(), 8000, "Reset");
+      logInfo("Viewer reset complete.");
+
+      const verifyResource = async (label, url) => {
+        try {
+          const response = await fetch(url, { method: "GET" });
+          if (!response.ok) {
+            logWarn(`${label} missing (${response.status}): ${url}`);
+            return false;
+          }
+          logInfo(`${label} OK: ${url}`);
+          return true;
+        } catch (error) {
+          logWarn(`${label} check failed: ${error.message || error}`);
+          return false;
+        }
+      };
+
+      logInfo("Checking IFC resources...");
+      await verifyResource("web-ifc wasm", "/web-ifc/web-ifc.wasm");
+      await verifyResource("web-ifc worker", "/web-ifc/web-ifc-mt.worker.js");
+
+      logInfo("Reading IFC file...");
+      const buffer = await withTimeout(file.arrayBuffer(), 10000, "File read");
+      updateLoadingProgress(5);
+      logInfo(`File read complete (${buffer.byteLength} bytes).`);
+
       const schema = inferSchema(buffer);
       if (debugSchema) debugSchema.textContent = schema;
       setStatus(`Loading ${file.name} (${schema})...`);
+
       const data = new Uint8Array(buffer);
-      await ifcLoader.load(data, false, file.name, {
+      updateLoadingProgress(15);
+
+      let lastProgress = 0;
+      const progressTimeout = setTimeout(() => {
+        if (lastProgress === 0) {
+          setStatus(`Parsing ${file.name}...`);
+          updateLoadingProgress(25);
+        }
+      }, 1500);
+
+      const progressCallback = (progress) => {
+        const normalized = normalizeProgress(progress);
+        lastProgress = normalized;
+        updateLoadingProgress(normalized);
+        setStatus(`Loading ${file.name} (${schema}) ${Math.round(normalized)}%`);
+      };
+
+      const loadOptions = {
         processData: {
-          progressCallback: (progress) => {
-            updateLoadingProgress(progress);
-            setStatus(`Loading ${file.name} (${schema}) ${Math.round(progress)}%`);
-          },
+          progressCallback,
         },
-      });
+      };
+
+      const loadWithTimeout = (promise, timeoutMs, timeoutMessage) =>
+        new Promise((resolve, reject) => {
+          const timer = setTimeout(() => {
+            reject(new Error(timeoutMessage));
+          }, timeoutMs);
+          promise
+            .then((result) => {
+              clearTimeout(timer);
+              resolve(result);
+            })
+            .catch((error) => {
+              clearTimeout(timer);
+              reject(error);
+            });
+        });
+
+      const waitForModelFromEvent = (timeoutMs) =>
+        new Promise((resolve, reject) => {
+          if (!fragmentsManager?.list?.onItemSet?.add) {
+            resolve(null);
+            return;
+          }
+
+          let settled = false;
+          let timer;
+          const handler = ({ value }) => {
+            if (settled) return;
+            settled = true;
+            if (timer) clearTimeout(timer);
+            if (typeof fragmentsManager.list.onItemSet.remove === "function") {
+              fragmentsManager.list.onItemSet.remove(handler);
+            }
+            resolve(value ?? null);
+          };
+
+          fragmentsManager.list.onItemSet.add(handler);
+
+          timer = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            if (typeof fragmentsManager.list.onItemSet.remove === "function") {
+              fragmentsManager.list.onItemSet.remove(handler);
+            }
+            reject(new Error("Model load event timed out."));
+          }, timeoutMs);
+        });
+
+      const waitForModelFromList = (timeoutMs) =>
+        new Promise((resolve) => {
+          const start = Date.now();
+          const interval = setInterval(() => {
+            const elapsed = Date.now() - start;
+            if (elapsed > timeoutMs) {
+              clearInterval(interval);
+              resolve(null);
+              return;
+            }
+
+            if (!fragmentsManager?.list) return;
+
+            let candidate = null;
+            if (typeof fragmentsManager.list.values === "function") {
+              const values = Array.from(fragmentsManager.list.values());
+              candidate = values[values.length - 1] ?? null;
+            } else if (fragmentsManager.list.ids && typeof fragmentsManager.list.get === "function") {
+              const ids = Array.from(fragmentsManager.list.ids);
+              const lastId = ids[ids.length - 1];
+              candidate = lastId !== undefined ? fragmentsManager.list.get(lastId) : null;
+            }
+
+            if (candidate) {
+              clearInterval(interval);
+              resolve(candidate);
+            }
+          }, 300);
+        });
+
+      const loadFn = ifcLoader?.load?.bind(ifcLoader);
+      if (!loadFn) {
+        throw new Error("IFC loader is not available.");
+      }
+
+      const attemptLoad = async (attemptName, attemptFn) => {
+        try {
+          logInfo(`Trying IFC load (${attemptName})...`);
+          return await loadWithTimeout(
+            attemptFn(),
+            20000,
+            `IFC loading timed out (${attemptName}).`
+          );
+        } catch (error) {
+          logWarn(`Load attempt failed (${attemptName}): ${error.message || error}`);
+          return null;
+        }
+      };
+
+      const attempts = [
+        ["file-arg", () => loadFn(file)],
+        ["file-arg-options", () => loadFn(file, { name: file.name, ...loadOptions })],
+        ["3-args", () => loadFn(data, false, file.name)],
+        ["1-arg", () => loadFn(data)],
+        ["2-args", () => loadFn(data, { name: file.name })],
+        ["4-args", () => loadFn(data, false, file.name, loadOptions)],
+        ["2-args-options", () => loadFn(data, { name: file.name, ...loadOptions })],
+      ];
+
+      const eventPromise = waitForModelFromEvent(60000).catch(() => null);
+      let model = null;
+
+      for (const [name, fn] of attempts) {
+        model = await attemptLoad(name, fn);
+        if (model) break;
+      }
+
+      if (!model) {
+        model = await eventPromise;
+      }
+
+      if (!model) {
+        model = await waitForModelFromList(5000);
+      }
+
+      if (!model) {
+        throw new Error("IFC load did not return a model.");
+      }
+
+      clearTimeout(progressTimeout);
+      updateLoadingProgress(100);
+
       if (debugModel) debugModel.textContent = "loaded";
       setStatus(`Loaded ${file.name} (${schema}).`);
+      logInfo(`Loaded ${file.name}.`);
+
+      // Manually trigger model setup if it wasn't added automatically
+      if (model && !currentModel) {
+        currentModel = model;
+        model.useCamera(world.camera.three);
+        world.scene.three.add(model.object);
+        fragments.core.update(true);
+        fitCameraToModel(world.camera, model.object);
+        logInfo("Model added to scene.");
+
+        await buildObjectTree(model).catch(error => {
+          console.error("Failed to build object tree:", error);
+        });
+
+        if (typeof model.highlight === "function") {
+          await colorizeCategories(model);
+          await fragments.core.update(true);
+        }
+      }
+
+      if (currentToken !== loadToken) {
+        return;
+      }
+
       if (currentModel) {
         await colorizeCategories(currentModel);
         if (fragmentsManager && fragmentsManager.core) {
           await fragmentsManager.core.update(true);
         }
       }
+    } catch (error) {
+      console.error("Failed to load IFC:", error);
+      showError(`Failed to load: ${error.message || error}`);
     } finally {
+      if (currentToken === loadToken) {
+        updateLoadingProgress(0);
+      }
       hideLoadingBar();
       isLoadingIfc = false;
     }
@@ -809,7 +1094,10 @@ const boot = async () => {
 
   fileInput?.addEventListener("change", (event) => {
     const [file] = event.target.files || [];
-    if (file) loadIfcFromFile(file).catch((error) => showError(error.message || error));
+    if (file) {
+      logInfo(`Selected file: ${file.name}`);
+      loadIfcFromFile(file).catch((error) => showError(error.message || error));
+    }
   });
 
   resetButton?.addEventListener("click", () => {
@@ -864,6 +1152,12 @@ const boot = async () => {
   propertiesClear?.addEventListener("click", async () => {
     await clearSelectionHighlight();
     setPropertiesMessage("Click an element to view properties.");
+  });
+
+  logClear?.addEventListener("click", () => {
+    if (logContent) {
+      logContent.innerHTML = "";
+    }
   });
 
   propertiesToggle?.addEventListener("click", () => {
