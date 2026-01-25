@@ -364,7 +364,7 @@ const setObjectTreeMessage = (text) => {
   }
 };
 
-const raycastercreateTreeNode = (label, children = [], icon = "📦", count = 0, data = {}) => {
+const createTreeNode = (label, children = [], icon = "📦", count = 0, data = {}) => {
   const li = document.createElement("li");
   li.className = "tree-item";
 
@@ -496,16 +496,63 @@ const showPropertiesForTreeNode = async (data) => {
     const table = createPropertiesTable(propData ?? {});
     propertiesContent.appendChild(table);
   }
-}; const buildObjectTree = async (model) => {
-  try {
+};
+
+const getLatestModelFromList = () => {
+  if (!fragmentsManager?.list) return null;
+  if (typeof fragmentsManager.list.values === "function") {
+    const values = Array.from(fragmentsManager.list.values());
+    return values[values.length - 1] ?? null;
+  }
+  if (fragmentsManager.list.ids && typeof fragmentsManager.list.get === "function") {
+    const ids = Array.from(fragmentsManager.list.ids);
+    const lastId = ids[ids.length - 1];
+    return lastId !== undefined ? fragmentsManager.list.get(lastId) : null;
+  }
+  return null;
+};
+
+const resolveModelForTree = (model) => {
+  const latest = getLatestModelFromList();
+  if (!latest) return model;
+  if (!model) return latest;
+  if (model === latest) return model;
+
+  const candidate = [model?.name, model?.id, model?.modelID, model?.uuid].find(Boolean);
+  if (!candidate) return latest;
+
+  const values = typeof fragmentsManager.list.values === "function"
+    ? Array.from(fragmentsManager.list.values())
+    : [];
+  const match = values.find((entry) =>
+    entry === model ||
+    entry?.name === candidate ||
+    entry?.id === candidate ||
+    entry?.modelID === candidate ||
+    entry?.uuid === candidate
+  );
+  return match || latest;
+};
+
+const buildObjectTree = async (model) => {
+  const attemptBuild = async () => {
     setObjectTreeMessage("Building tree...");
 
-    const categories = await model.getCategories();
+    const resolvedModel = resolveModelForTree(model);
+    if (resolvedModel && resolvedModel !== currentModel) {
+      currentModel = resolvedModel;
+    }
+
+    if (!resolvedModel) {
+      throw new Error("Model not available for object tree.");
+    }
+
+    const categories = await resolvedModel.getCategories();
     const rootNodes = [];
 
     for (const category of categories) {
       const regex = new RegExp(`^${category}$`);
-      const items = await model.getItemsOfCategories([regex]);
+      const items = await resolvedModel.getItemsOfCategories([regex]);
       const localIds = Object.values(items).flat();
 
       if (localIds.length === 0) continue;
@@ -563,8 +610,23 @@ const showPropertiesForTreeNode = async (data) => {
       objectTreeContent.innerHTML = "";
       objectTreeContent.appendChild(rootUl);
     }
+  };
+
+  try {
+    await attemptBuild();
   } catch (error) {
-    setObjectTreeMessage(`Error building tree: ${error.message || error}`);
+    const message = error?.message || String(error);
+    if (message.includes("Model not found")) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      try {
+        await attemptBuild();
+        return;
+      } catch (retryError) {
+        setObjectTreeMessage(`Error building tree: ${retryError.message || retryError}`);
+        return;
+      }
+    }
+    setObjectTreeMessage(`Error building tree: ${message}`);
   }
 };
 
@@ -1104,6 +1166,13 @@ const boot = async () => {
 
       if (!model) {
         throw new Error("IFC load did not return a model.");
+      }
+
+      if (fragmentsManager?.list && typeof fragmentsManager.list.getKey === "function") {
+        const existingKey = fragmentsManager.list.getKey(model);
+        if (existingKey === undefined && typeof fragmentsManager.list.add === "function") {
+          fragmentsManager.list.add(model);
+        }
       }
 
       clearTimeout(progressTimeout);
