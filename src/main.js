@@ -27,6 +27,7 @@ const loadingProgress = document.getElementById("loading-progress");
 const logPanel = document.getElementById("log-panel");
 const logContent = document.getElementById("log-content");
 const logClear = document.getElementById("log-clear");
+const axisHelperContainer = document.getElementById("axis-helper");
 
 // Store current model globally
 let currentModel = null;
@@ -762,6 +763,67 @@ const boot = async () => {
       propertiesContent.appendChild(table);
     }
   };
+
+  // Axis helper (small viewport in bottom-left)
+  if (axisHelperContainer) {
+    const axisScene = new THREE.Scene();
+    const axisCamera = new THREE.PerspectiveCamera(75, 1, 0.1, 100);
+    axisCamera.position.set(5, 5, 5);
+    axisCamera.lookAt(0, 0, 0);
+
+    const axisRenderer = new THREE.WebGLRenderer({
+      alpha: true,
+      antialias: true,
+      precision: "lowp"
+    });
+    axisRenderer.setSize(
+      axisHelperContainer.clientWidth || 100,
+      axisHelperContainer.clientHeight || 100
+    );
+    axisRenderer.setPixelRatio(window.devicePixelRatio || 1);
+    axisRenderer.setClearColor(0x000000, 0.1);
+    axisRenderer.shadowMap.enabled = false;
+    axisHelperContainer.appendChild(axisRenderer.domElement);
+
+    const axesHelper = new THREE.AxesHelper(2);
+    axisScene.add(axesHelper);
+
+    const updateAxisHelper = () => {
+      const mainCam = world.camera && world.camera.three ? world.camera.three : null;
+
+      if (mainCam) {
+        axesHelper.quaternion.copy(mainCam.quaternion);
+      } else {
+        axesHelper.quaternion.identity();
+      }
+
+      axisCamera.position.set(5, 5, 5);
+      axisCamera.lookAt(0, 0, 0);
+
+      const width = axisHelperContainer.clientWidth || 100;
+      const height = axisHelperContainer.clientHeight || 100;
+      const pixelRatio = window.devicePixelRatio || 1;
+      const targetW = Math.max(1, Math.round(width * pixelRatio));
+      const targetH = Math.max(1, Math.round(height * pixelRatio));
+
+      if (
+        axisRenderer.domElement.width !== targetW ||
+        axisRenderer.domElement.height !== targetH
+      ) {
+        axisRenderer.setSize(width, height, false);
+        axisCamera.aspect = width / height;
+        axisCamera.updateProjectionMatrix();
+      }
+
+      axisRenderer.render(axisScene, axisCamera);
+    };
+
+    if (world.renderer && world.renderer.onAfterUpdate) {
+      world.renderer.onAfterUpdate.add(updateAxisHelper);
+    }
+
+    updateAxisHelper();
+  }
 
   const ifcLoader = components.get(OBC.IfcLoader);
   try {
