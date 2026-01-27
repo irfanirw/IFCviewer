@@ -10,8 +10,8 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Unbounded:wght@500;700&display=swap"
     rel="stylesheet" />
-  <script type="module" crossorigin src="/assets/index-tJgBDhDN.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/index-CKRa6ftT.css">
+  <script type="module" crossorigin src="/assets/index-CG6Th1ur.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-DyMnpRcP.css">
 </head>
 
 <body>
@@ -30,7 +30,7 @@
     <header class="hero">
       <div>
         <p class="eyebrow">That Open Engine</p>
-        <h1>IFC Viewer</h1>
+        <h1>IFC Viewerrrrrr</h1>
         <p class="lede">
           Drop an IFC file to explore it with That Open Company&#39;s 3D engine.
         </p>
@@ -45,6 +45,7 @@
     </header>
     <main class="viewer-shell">
       <div id="viewer"></div>
+      <div id="axis-helper" class="axis-helper" aria-hidden="true"></div>
       <div id="status" class="status">Drop an IFC file to begin.</div>
       <div id="debug" class="debug-panel">
         <div class="debug-title">Debug</div>
@@ -52,6 +53,13 @@
         <div class="debug-row"><span>Model</span><strong id="debug-model">-</strong></div>
         <div class="debug-row"><span>Last Error</span><strong id="debug-error">-</strong></div>
       </div>
+      <aside id="log-panel" class="log-panel">
+        <div class="log-header">
+          <span>Log</span>
+          <button id="log-clear" class="log-clear">Clear</button>
+        </div>
+        <div id="log-content" class="log-content"></div>
+      </aside>
       <aside id="properties-panel" class="properties-panel">
         <div class="properties-header">
           <span id="properties-title">IFC Properties</span>
@@ -75,8 +83,13 @@
             <button id="objecttree-toggle" class="objecttree-toggle" title="Hide Object Tree">×</button>
           </div>
         </div>
-        <div id="objecttree-content" class="objecttree-content">
-          <p class="objecttree-message">Load an IFC file to view structure.</p>
+        <div class="objecttree-scroll">
+          <div id="objecttree-content" class="objecttree-content">
+            <p class="objecttree-message">Load an IFC file to view structure.</p>
+          </div>
+          <div id="objecttree-scrollbar" class="objecttree-scrollbar" aria-hidden="true">
+            <div id="objecttree-scrollbar-thumb" class="objecttree-scrollbar-thumb"></div>
+          </div>
         </div>
       </aside>
       <button id="objecttree-show" class="objecttree-show" style="display: none;" title="Show Object Tree">
