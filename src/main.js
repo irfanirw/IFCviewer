@@ -21,6 +21,8 @@ const objectTreeContent = document.getElementById("objecttree-content");
 const objectTreeCollapse = document.getElementById("objecttree-collapse");
 const objectTreeToggle = document.getElementById("objecttree-toggle");
 const objectTreeShow = document.getElementById("objecttree-show");
+const objectTreeScrollbar = document.getElementById("objecttree-scrollbar");
+const objectTreeScrollbarThumb = document.getElementById("objecttree-scrollbar-thumb");
 const loadingBar = document.getElementById("loading-bar");
 const loadingPercentage = document.getElementById("loading-percentage");
 const loadingProgress = document.getElementById("loading-progress");
@@ -161,9 +163,33 @@ const formatPropertyKey = (key) => {
   }
 
   // Capitalize first letter of each word after dots
-  return key.split('.').map(part =>
+  const formatted = key.split('.').map(part =>
     part.charAt(0).toUpperCase() + part.slice(1)
   ).join('.');
+
+  return normalizeIfcText(formatted);
+};
+
+const normalizeIfcToken = (token) => {
+  if (token.length < 3) return token;
+  const prefix = token.slice(0, 3);
+  if (prefix.toLowerCase() !== "ifc") return token;
+
+  const rest = token.slice(3);
+  if (!rest) return "Ifc";
+
+  const isAllLower = rest === rest.toLowerCase();
+  const isAllUpper = rest === rest.toUpperCase();
+  if (isAllLower || isAllUpper) {
+    return `Ifc${rest.charAt(0).toUpperCase()}${rest.slice(1).toLowerCase()}`;
+  }
+
+  return `Ifc${rest}`;
+};
+
+const normalizeIfcText = (text) => {
+  if (typeof text !== "string" || text.length === 0) return text;
+  return text.replace(/\bifc[a-z0-9_]*\b/gi, (match) => normalizeIfcToken(match));
 };
 
 const createPropertiesTable = (data) => {
@@ -208,7 +234,8 @@ const createPropertiesTable = (data) => {
 
     const valueCell = document.createElement('td');
     valueCell.className = 'properties-table-value';
-    valueCell.textContent = value !== null && value !== undefined ? String(value) : '-';
+    const rawValue = value !== null && value !== undefined ? String(value) : '-';
+    valueCell.textContent = normalizeIfcText(rawValue);
 
     row.appendChild(keyCell);
     row.appendChild(valueCell);
@@ -361,8 +388,37 @@ const highlightSelectedItem = async (model, localId, category = null) => {
 const setObjectTreeMessage = (text) => {
   if (objectTreeContent) {
     objectTreeContent.innerHTML = `<p class="objecttree-message">${text}</p>`;
+    updateObjectTreeScrollbar();
   }
 };
+
+const updateObjectTreeScrollbar = () => {
+  if (!objectTreeContent || !objectTreeScrollbar || !objectTreeScrollbarThumb) return;
+
+  const { scrollHeight, clientHeight, scrollTop } = objectTreeContent;
+  if (clientHeight === 0) return;
+
+  const minThumb = 24;
+  const hasOverflow = scrollHeight > clientHeight + 1;
+  const rawThumb = (clientHeight / Math.max(scrollHeight, clientHeight)) * clientHeight;
+  const thumbHeight = Math.max(minThumb, Math.min(clientHeight, rawThumb));
+  const maxTop = Math.max(0, clientHeight - thumbHeight);
+  const top = hasOverflow && scrollHeight > clientHeight
+    ? (scrollTop / (scrollHeight - clientHeight)) * maxTop
+    : 0;
+
+  objectTreeScrollbarThumb.style.height = `${thumbHeight}px`;
+  objectTreeScrollbarThumb.style.transform = `translateY(${top}px)`;
+};
+
+if (objectTreeContent) {
+  objectTreeContent.addEventListener("scroll", updateObjectTreeScrollbar, { passive: true });
+  if (typeof ResizeObserver !== "undefined") {
+    const observer = new ResizeObserver(() => updateObjectTreeScrollbar());
+    observer.observe(objectTreeContent);
+    if (objectTreePanel) observer.observe(objectTreePanel);
+  }
+}
 
 const createTreeNode = (label, children = [], icon = "📦", count = 0, data = {}) => {
   const li = document.createElement("li");
@@ -387,7 +443,7 @@ const createTreeNode = (label, children = [], icon = "📦", count = 0, data = {
 
   const itemLabel = document.createElement("span");
   itemLabel.className = "tree-item-label";
-  itemLabel.textContent = label;
+  itemLabel.textContent = normalizeIfcText(label);
 
   header.appendChild(expandIcon);
   header.appendChild(itemIcon);
@@ -419,6 +475,8 @@ const createTreeNode = (label, children = [], icon = "📦", count = 0, data = {
       } else {
         childrenUl.style.maxHeight = "0";
       }
+
+      requestAnimationFrame(updateObjectTreeScrollbar);
 
       // Also handle item selection for category nodes with data
       const parsedData = JSON.parse(header.dataset.nodeData);
@@ -534,6 +592,176 @@ const resolveModelForTree = (model) => {
   return match || latest;
 };
 
+const spatialHierarchy = [
+  "IfcProject",
+  "IfcSite",
+  "IfcBuilding",
+  "IfcBuildingStorey",
+  "IfcSpace",
+];
+
+const spatialCategoryKeys = new Set(spatialHierarchy.map((category) => category.toLowerCase()));
+
+const getCategoryKey = (category) => (
+  typeof category === "string" ? category.toLowerCase() : ""
+);
+
+const isCategory = (node, category) => (
+  getCategoryKey(node?.category) === category.toLowerCase()
+);
+
+const isSpatialCategory = (category) => spatialCategoryKeys.has(getCategoryKey(category));
+
+const getSpatialChildren = (node) => Array.isArray(node?.children) ? node.children : [];
+
+const collectDescendants = (node, predicate) => {
+  const results = [];
+  const visit = (item) => {
+    if (!item) return;
+    if (predicate(item)) results.push(item);
+    const children = getSpatialChildren(item);
+    for (const child of children) visit(child);
+  };
+  visit(node);
+  return results;
+};
+
+const uniqueByLocalId = (nodes) => {
+  const seen = new Set();
+  const unique = [];
+  for (const node of nodes) {
+    const id = node?.localId;
+    if (id == null) {
+      unique.push(node);
+      continue;
+    }
+    if (seen.has(id)) continue;
+    seen.add(id);
+    unique.push(node);
+  }
+  return unique;
+};
+
+const formatSpatialLabel = (category, localId, placeholderSuffix = "") => {
+  if (localId != null) return `${category} [${localId}]`;
+  if (placeholderSuffix) return `${category} (${placeholderSuffix})`;
+  return category;
+};
+
+const collectElements = (root, options = {}) => {
+  const elements = [];
+  const seen = new Set();
+  const stopAtSpaces = Boolean(options.stopAtSpaces);
+
+  const visit = (item) => {
+    if (!item) return;
+    const isSpace = isCategory(item, "IfcSpace");
+    if (stopAtSpaces && isSpace && item !== root) return;
+
+    const isSpatial = item.category && isSpatialCategory(item.category);
+    if (!isSpatial && item.localId != null && !seen.has(item.localId)) {
+      seen.add(item.localId);
+      elements.push(item);
+    }
+
+    const children = getSpatialChildren(item);
+    for (const child of children) visit(child);
+  };
+
+  visit(root);
+  return elements;
+};
+
+const resolveElementCategory = (element, fallback = "IfcElement") => {
+  const raw = element?.category ?? element?.type ?? element?.Type ?? element?._category?.value;
+  if (!raw) return fallback;
+  return normalizeIfcText(raw);
+};
+
+const buildElementCategoryNodes = async (elements, options = {}, model = null) => {
+  const allowEmpty = Boolean(options.allowEmpty);
+  if (!elements.length) {
+    if (!allowEmpty) return [];
+    const emptyLeaf = createTreeNode("No elements", [], "⋯", 0, {});
+    const placeholder = createTreeNode("IfcElement", [emptyLeaf], "🧱", 0, {});
+    return [placeholder];
+  }
+
+  const elementsWithMissingCategory = elements.filter(
+    (element) => !element?.category && !element?.type && !element?.Type
+  );
+  const lookupModel = model ?? currentModel;
+  if (elementsWithMissingCategory.length && lookupModel?.getItemsData) {
+    try {
+      const ids = elementsWithMissingCategory
+        .map((element) => element.localId)
+        .filter((id) => id != null);
+      if (ids.length) {
+        const itemsData = await lookupModel.getItemsData(ids);
+        const byId = new Map();
+        ids.forEach((id, index) => byId.set(id, itemsData?.[index] ?? null));
+        elementsWithMissingCategory.forEach((element) => {
+          const data = byId.get(element.localId);
+          if (!data) return;
+          element.type = data.type
+            ?? data.Type
+            ?? data.ifcType
+            ?? data._type?.value
+            ?? data._category?.value
+            ?? null;
+        });
+      }
+    } catch (e) {
+      console.warn("Failed to resolve element categories:", e);
+    }
+  }
+
+  const grouped = new Map();
+  for (const element of elements) {
+    const category = resolveElementCategory(element, "IfcElement");
+    if (!grouped.has(category)) grouped.set(category, []);
+    grouped.get(category).push(element);
+  }
+
+  const categoryNodes = [];
+  for (const [category, items] of grouped.entries()) {
+    const elementNodes = items.map((element) =>
+      createTreeNode(
+        formatSpatialLabel(category, element.localId),
+        [],
+        "📄",
+        0,
+        { localId: element.localId, category }
+      )
+    );
+    const categoryNode = createTreeNode(category, elementNodes, "🧱", elementNodes.length, {});
+    categoryNodes.push(categoryNode);
+  }
+
+  return categoryNodes;
+};
+
+const buildPlaceholderChain = async (elements, model = null) => {
+  const elementGroups = await buildElementCategoryNodes(elements, { allowEmpty: true }, model);
+  if (!elementGroups.length) return [];
+
+  const spaceNode = createTreeNode(
+    formatSpatialLabel("IfcSpace", null, "Unassigned"),
+    elementGroups,
+    "🏠",
+    elements.length,
+    {}
+  );
+  const storeyNode = createTreeNode(
+    formatSpatialLabel("IfcBuildingStorey", null, "Unassigned"),
+    [spaceNode],
+    "🏢",
+    1,
+    {}
+  );
+  return [storeyNode];
+};
+
 const buildObjectTree = async (model) => {
   const attemptBuild = async () => {
     setObjectTreeMessage("Building tree...");
@@ -547,54 +775,195 @@ const buildObjectTree = async (model) => {
       throw new Error("Model not available for object tree.");
     }
 
-    const categories = await resolvedModel.getCategories();
+    const spatialRoot = await resolvedModel.getSpatialStructure();
     const rootNodes = [];
 
-    for (const category of categories) {
-      const regex = new RegExp(`^${category}$`);
-      const items = await resolvedModel.getItemsOfCategories([regex]);
-      const localIds = Object.values(items).flat();
+    const projectNodes = uniqueByLocalId(
+      spatialRoot?.category === "IfcProject"
+        ? [spatialRoot]
+        : collectDescendants(spatialRoot, (node) => isCategory(node, "IfcProject"))
+    );
 
-      if (localIds.length === 0) continue;
+    const effectiveProjects = projectNodes.length
+      ? projectNodes
+      : [{
+        category: "IfcProject",
+        localId: null,
+        children: spatialRoot ? [spatialRoot] : [],
+      }];
 
-      const childNodes = [];
-
-      // Create child nodes for individual elements (limit to first 50 for performance)
-      const displayLimit = Math.min(localIds.length, 50);
-      for (let i = 0; i < displayLimit; i++) {
-        const localId = localIds[i];
-
-        // Don't fetch GUID here, do it on click to avoid errors
-        const childNode = createTreeNode(
-          `${category} [${localId}]`,
-          [],
-          "📄",
-          0,
-          { localId, category }
-        );
-        childNodes.push(childNode);
-      }
-
-      if (localIds.length > displayLimit) {
-        const moreNode = createTreeNode(
-          `... ${localIds.length - displayLimit} more items`,
-          [],
-          "⋯",
-          0,
-          {}
-        );
-        childNodes.push(moreNode);
-      }
-
-      const categoryNode = createTreeNode(
-        category,
-        childNodes,
-        "📁",
-        localIds.length,
-        { category, localIds }
+    for (const project of effectiveProjects) {
+      const siteNodes = uniqueByLocalId(
+        collectDescendants(project, (node) => isCategory(node, "IfcSite"))
       );
 
-      rootNodes.push(categoryNode);
+      const effectiveSites = siteNodes.length
+        ? siteNodes
+        : [{
+          category: "IfcSite",
+          localId: null,
+          children: getSpatialChildren(project),
+        }];
+
+      const siteTreeNodes = [];
+
+      for (const site of effectiveSites) {
+        const buildingNodes = uniqueByLocalId(
+          collectDescendants(site, (node) => isCategory(node, "IfcBuilding"))
+        );
+
+        const effectiveBuildings = buildingNodes.length
+          ? buildingNodes
+          : [{
+            category: "IfcBuilding",
+            localId: null,
+            children: getSpatialChildren(site),
+          }];
+
+        const buildingTreeNodes = [];
+
+        for (const building of effectiveBuildings) {
+          const storeyNodes = uniqueByLocalId(
+            collectDescendants(building, (node) => isCategory(node, "IfcBuildingStorey"))
+          );
+
+          const effectiveStoreys = storeyNodes.length
+            ? storeyNodes
+            : [{
+              category: "IfcBuildingStorey",
+              localId: null,
+              children: getSpatialChildren(building),
+            }];
+
+          const storeyTreeNodes = [];
+
+          for (const storey of effectiveStoreys) {
+            const spaceNodes = uniqueByLocalId(
+              collectDescendants(storey, (node) => isCategory(node, "IfcSpace"))
+            );
+
+            const assignedElements = new Set();
+            const spaceTreeNodes = [];
+
+            for (const space of spaceNodes) {
+              const spaceElements = collectElements(space, { stopAtSpaces: true });
+              spaceElements.forEach((element) => assignedElements.add(element.localId));
+
+              const children = await buildElementCategoryNodes(spaceElements, { allowEmpty: true }, resolvedModel);
+              const spaceLabel = formatSpatialLabel("IfcSpace", space.localId);
+              const spaceNode = createTreeNode(
+                spaceLabel,
+                children,
+                "🏠",
+                spaceElements.length,
+                { localId: space.localId, category: "IfcSpace" }
+              );
+              spaceTreeNodes.push(spaceNode);
+            }
+
+            const storeyElements = collectElements(storey, { stopAtSpaces: true })
+              .filter((element) => !assignedElements.has(element.localId));
+            if (storeyElements.length) {
+              const children = await buildElementCategoryNodes(storeyElements, {}, resolvedModel);
+              const placeholderSpace = createTreeNode(
+                formatSpatialLabel("IfcSpace", null, "Unassigned"),
+                children,
+                "🏠",
+                storeyElements.length,
+                {}
+              );
+              spaceTreeNodes.push(placeholderSpace);
+            }
+
+            if (spaceTreeNodes.length === 0) {
+              const children = await buildElementCategoryNodes([], { allowEmpty: true }, resolvedModel);
+              const placeholderSpace = createTreeNode(
+                formatSpatialLabel("IfcSpace", null, "Unassigned"),
+                children,
+                "🏠",
+                0,
+                {}
+              );
+              spaceTreeNodes.push(placeholderSpace);
+            }
+
+            const storeyLabel = formatSpatialLabel(
+              "IfcBuildingStorey",
+              storey.localId,
+              storey.localId == null ? "Unassigned" : ""
+            );
+            const storeyNode = createTreeNode(
+              storeyLabel,
+              spaceTreeNodes,
+              "🏢",
+              spaceTreeNodes.length,
+              storey.localId != null ? { localId: storey.localId, category: "IfcBuildingStorey" } : {}
+            );
+            storeyTreeNodes.push(storeyNode);
+          }
+
+          if (storeyTreeNodes.length === 0) {
+            const buildingElements = collectElements(building, { stopAtSpaces: true });
+            const placeholderStoreys = await buildPlaceholderChain(buildingElements, resolvedModel);
+            if (placeholderStoreys.length) {
+              storeyTreeNodes.push(...placeholderStoreys);
+            }
+          }
+
+          const buildingLabel = formatSpatialLabel(
+            "IfcBuilding",
+            building.localId,
+            building.localId == null ? "Unassigned" : ""
+          );
+          const buildingNode = createTreeNode(
+            buildingLabel,
+            storeyTreeNodes,
+            "🏗️",
+            storeyTreeNodes.length,
+            building.localId != null ? { localId: building.localId, category: "IfcBuilding" } : {}
+          );
+          buildingTreeNodes.push(buildingNode);
+        }
+
+        if (buildingTreeNodes.length === 0) {
+          const siteElements = collectElements(site, { stopAtSpaces: true });
+          const placeholderStoreys = await buildPlaceholderChain(siteElements, resolvedModel);
+          if (placeholderStoreys.length) {
+            const buildingNode = createTreeNode(
+              formatSpatialLabel("IfcBuilding", null, "Unassigned"),
+              placeholderStoreys,
+              "🏗️",
+              placeholderStoreys.length,
+              {}
+            );
+            buildingTreeNodes.push(buildingNode);
+          }
+        }
+
+        const siteLabel = formatSpatialLabel("IfcSite", site.localId, site.localId == null ? "Unassigned" : "");
+        const siteNode = createTreeNode(
+          siteLabel,
+          buildingTreeNodes,
+          "🌍",
+          buildingTreeNodes.length,
+          site.localId != null ? { localId: site.localId, category: "IfcSite" } : {}
+        );
+        siteTreeNodes.push(siteNode);
+      }
+
+      const projectLabel = formatSpatialLabel(
+        "IfcProject",
+        project.localId,
+        project.localId == null ? "Unassigned" : ""
+      );
+      const projectNode = createTreeNode(
+        projectLabel,
+        siteTreeNodes,
+        "🏁",
+        siteTreeNodes.length,
+        project.localId != null ? { localId: project.localId, category: "IfcProject" } : {}
+      );
+      rootNodes.push(projectNode);
     }
 
     if (rootNodes.length === 0) {
@@ -610,6 +979,7 @@ const buildObjectTree = async (model) => {
       objectTreeContent.innerHTML = "";
       objectTreeContent.appendChild(rootUl);
     }
+    requestAnimationFrame(updateObjectTreeScrollbar);
   };
 
   try {
@@ -644,6 +1014,7 @@ const collapseAllTreeNodes = () => {
       children.style.maxHeight = "0";
     }
   });
+  requestAnimationFrame(updateObjectTreeScrollbar);
 };
 
 const inferSchema = (buffer) => {
