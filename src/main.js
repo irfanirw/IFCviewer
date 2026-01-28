@@ -18,6 +18,7 @@ const propertiesShow = document.getElementById("properties-show");
 const objectTreePanel = document.getElementById("objecttree-panel");
 const objectTreeTitle = document.getElementById("objecttree-title");
 const objectTreeContent = document.getElementById("objecttree-content");
+const objectTreeExpand = document.getElementById("objecttree-expand");
 const objectTreeCollapse = document.getElementById("objecttree-collapse");
 const objectTreeToggle = document.getElementById("objecttree-toggle");
 const objectTreeShow = document.getElementById("objecttree-show");
@@ -37,6 +38,7 @@ let currentHighlightedItem = null; // Track currently highlighted item
 let fragmentsManager = null; // Store fragments manager globally
 let isLoadingIfc = false;
 let loadToken = 0;
+let currentModelLabel = null;
 
 const appendLogEntry = (message, level = "info") => {
   if (!logContent) return;
@@ -247,43 +249,13 @@ const createPropertiesTable = (data) => {
 };
 
 const reapplyCategoryHighlights = async (model) => {
-  // Reapply light grey color instead of category colors
-  if (!model || typeof model.getAllIds !== "function" || typeof model.highlight !== "function") return;
-
-  try {
-    const allIds = await model.getAllIds();
-    if (allIds.length === 0) return;
-
-    await model.highlight(allIds, {
-      customId: "default-grey",
-      color: new THREE.Color("#FFFFFF"), // white
-      renderedFaces: FRAGS.RenderedFaces.ALL,
-      opacity: 1,
-      transparent: false,
-    });
-  } catch (e) {
-    console.warn("Failed to reapply default color:", e);
-  }
+  // Keep original IFC colors; no reapply needed.
+  void model;
 };
 
 const colorizeCategories = async (model) => {
-  // Category colors deactivated - apply light grey to all objects
-  if (!model || typeof model.getAllIds !== "function" || typeof model.highlight !== "function") return;
-
-  try {
-    const allIds = await model.getAllIds();
-    if (allIds.length === 0) return;
-
-    await model.highlight(allIds, {
-      customId: "default-grey",
-      color: new THREE.Color("#FFFFFF"), // white
-      renderedFaces: FRAGS.RenderedFaces.ALL,
-      opacity: 1,
-      transparent: false,
-    });
-  } catch (error) {
-    console.error(`Failed to apply default color: ${error.message || error}`);
-  }
+  // Preserve imported IFC colors; no-op.
+  void model;
 };
 
 const selectionRenderedFaces =
@@ -302,38 +274,15 @@ const clearSelectionHighlight = async () => {
   const { model, localId } = currentHighlightedItem;
 
   try {
-    // Clear the selection highlights
-    if (typeof model.clearHighlight === "function") {
-      try {
-        await model.clearHighlight(selectionFillId);
-        await model.clearHighlight(selectionWireId);
-      } catch (e) {
-        await model.clearHighlight();
-      }
+    // Reset highlight/color/opacity to restore original IFC materials.
+    if (typeof model.resetHighlight === "function") {
+      try { await model.resetHighlight([localId]); } catch (e) { /* noop */ }
     }
-    if (typeof model.removeHighlight === "function") {
-      try {
-        await model.removeHighlight([localId], selectionFillId);
-        await model.removeHighlight([localId], selectionWireId);
-      } catch (e) {
-        await model.removeHighlight([localId]);
-      }
+    if (typeof model.resetColor === "function") {
+      try { await model.resetColor([localId]); } catch (e) { /* noop */ }
     }
-
-    // Reapply grey color to the previously selected item
-    if (typeof model.highlight === "function") {
-      try {
-        // Reapply white to the deselected item
-        await model.highlight([localId], {
-          customId: "default-grey",
-          color: new THREE.Color("#FFFFFF"),
-          renderedFaces: FRAGS.RenderedFaces.ALL,
-          opacity: 1,
-          transparent: false,
-        });
-      } catch (e) {
-        console.warn("Failed to reapply default appearance to deselected item:", e);
-      }
+    if (typeof model.resetOpacity === "function") {
+      try { await model.resetOpacity([localId]); } catch (e) { /* noop */ }
     }
   } catch (e) {
     console.warn("Failed to clear previous highlight:", e);
@@ -367,6 +316,7 @@ const highlightSelectedItem = async (model, localId, category = null) => {
       color: selectionFillColor,
       emissive: selectionFillColor,
       emissiveIntensity: 3,
+      preserveOriginalMaterial: true,
       renderedFaces: FRAGS.RenderedFaces.ALL,
       opacity: 1,
       transparent: false,
@@ -443,18 +393,14 @@ const createTreeNode = (label, children = [], icon = "📦", count = 0, data = {
 
   const itemLabel = document.createElement("span");
   itemLabel.className = "tree-item-label";
-  itemLabel.textContent = normalizeIfcText(label);
+  const labelWithCount = count > 0 ? `${label} (${count})` : label;
+  itemLabel.textContent = normalizeIfcText(labelWithCount);
 
   header.appendChild(expandIcon);
   header.appendChild(itemIcon);
   header.appendChild(itemLabel);
 
-  if (count > 0) {
-    const itemCount = document.createElement("span");
-    itemCount.className = "tree-item-count";
-    itemCount.textContent = count;
-    header.appendChild(itemCount);
-  }
+  // Count is shown inline in the label to match the reference tree style.
 
   li.appendChild(header);
 
@@ -642,16 +588,64 @@ const uniqueByLocalId = (nodes) => {
   return unique;
 };
 
-const formatSpatialLabel = (category, localId, placeholderSuffix = "") => {
-  if (localId != null) return `${category} [${localId}]`;
+const formatSpatialLabel = (category, _localId, placeholderSuffix = "") => {
   if (placeholderSuffix) return `${category} (${placeholderSuffix})`;
   return category;
 };
+
+const getNodeName = (node) => (
+  node?.name ?? node?.Name ?? node?.LongName ?? null
+);
+
+const spatialNameCategories = new Set(["IfcSite", "IfcBuilding", "IfcBuildingStorey"]);
+
+const formatSpatialLabelFromNode = (node, categoryFallback, placeholderSuffix = "") => {
+  const category = categoryFallback ?? node?.category ?? "IfcSpatialElement";
+  if (category === "IfcSpace") {
+    return "IfcSpace";
+  }
+  if (spatialNameCategories.has(category)) {
+    const name = getNodeName(node);
+    if (name && String(name).trim().length) {
+      return normalizeIfcText(String(name).trim());
+    }
+  }
+  return formatSpatialLabel(category, node?.localId, placeholderSuffix);
+};
+
+const pluralizeIfcCategory = (category) => {
+  if (!category) return category;
+  if (category.endsWith("s")) return category;
+  if (category.endsWith("y")) return `${category.slice(0, -1)}ies`;
+  return `${category}s`;
+};
+
+const formatElementLabel = (element, category) => {
+  const name = getNodeName(element);
+  const localId = element?.localId;
+  if (name && localId != null) {
+    return normalizeIfcText(`${name}:${localId}`);
+  }
+  if (name) return normalizeIfcText(String(name));
+  if (localId != null) return `${category}:${localId}`;
+  return category;
+};
+
+const isNonSpatialElement = (node) => {
+  if (!node) return false;
+  if (node.localId == null) return false;
+  return !isSpatialCategory(node.category);
+};
+
+const getDirectElementChildren = (node) => (
+  getSpatialChildren(node).filter((child) => isNonSpatialElement(child))
+);
 
 const collectElements = (root, options = {}) => {
   const elements = [];
   const seen = new Set();
   const stopAtSpaces = Boolean(options.stopAtSpaces);
+  const traverseElementChildren = Boolean(options.traverseElementChildren);
 
   const visit = (item) => {
     if (!item) return;
@@ -659,9 +653,11 @@ const collectElements = (root, options = {}) => {
     if (stopAtSpaces && isSpace && item !== root) return;
 
     const isSpatial = item.category && isSpatialCategory(item.category);
-    if (!isSpatial && item.localId != null && !seen.has(item.localId)) {
+    const isElement = !isSpatial && item.localId != null;
+    if (isElement && !seen.has(item.localId)) {
       seen.add(item.localId);
       elements.push(item);
+      if (!traverseElementChildren) return;
     }
 
     const children = getSpatialChildren(item);
@@ -672,10 +668,57 @@ const collectElements = (root, options = {}) => {
   return elements;
 };
 
+const getStoreyElements = async (storey, model) => {
+  let elements = collectElements(storey, { stopAtSpaces: true });
+  let usedRelations = false;
+
+  if (
+    elements.length === 0 &&
+    model &&
+    typeof model.getItemsChildren === "function" &&
+    storey?.localId != null
+  ) {
+    try {
+      const childIds = await model.getItemsChildren([storey.localId]);
+      if (Array.isArray(childIds) && childIds.length > 0) {
+        usedRelations = true;
+        let categories = [];
+        if (typeof model.getItemsCategories === "function") {
+          categories = await model.getItemsCategories(childIds);
+        }
+        elements = childIds.map((id, index) => ({
+          localId: id,
+          category: categories?.[index] ?? null,
+        }));
+      }
+    } catch (e) {
+      console.warn("Failed to resolve storey elements via relations:", e);
+    }
+  }
+
+  return { elements, usedRelations };
+};
+
 const resolveElementCategory = (element, fallback = "IfcElement") => {
   const raw = element?.category ?? element?.type ?? element?.Type ?? element?._category?.value;
   if (!raw) return fallback;
   return normalizeIfcText(raw);
+};
+
+const buildElementNode = async (element, model = null) => {
+  const category = resolveElementCategory(element, "IfcElement");
+  const label = formatElementLabel(element, category);
+  const childElements = getDirectElementChildren(element);
+  const childCategoryNodes = childElements.length
+    ? await buildElementCategoryNodes(childElements, {}, model)
+    : [];
+  return createTreeNode(
+    label,
+    childCategoryNodes,
+    "📄",
+    childElements.length,
+    { localId: element.localId, category }
+  );
 };
 
 const buildElementCategoryNodes = async (elements, options = {}, model = null) => {
@@ -725,16 +768,17 @@ const buildElementCategoryNodes = async (elements, options = {}, model = null) =
 
   const categoryNodes = [];
   for (const [category, items] of grouped.entries()) {
-    const elementNodes = items.map((element) =>
-      createTreeNode(
-        formatSpatialLabel(category, element.localId),
-        [],
-        "📄",
-        0,
-        { localId: element.localId, category }
-      )
+    const elementNodes = [];
+    for (const element of items) {
+      elementNodes.push(await buildElementNode(element, model));
+    }
+    const categoryNode = createTreeNode(
+      pluralizeIfcCategory(category),
+      elementNodes,
+      "🧱",
+      elementNodes.length,
+      {}
     );
-    const categoryNode = createTreeNode(category, elementNodes, "🧱", elementNodes.length, {});
     categoryNodes.push(categoryNode);
   }
 
@@ -760,6 +804,30 @@ const buildPlaceholderChain = async (elements, model = null) => {
     {}
   );
   return [storeyNode];
+};
+
+const buildSpaceNode = async (space, model) => {
+  const spaceElements = collectElements(space, { stopAtSpaces: true });
+  const children = await buildElementCategoryNodes(spaceElements, { allowEmpty: true }, model);
+  const label = "IfcSpace";
+  return createTreeNode(
+    label,
+    children,
+    "🏠",
+    spaceElements.length,
+    space?.localId != null ? { localId: space.localId, category: "IfcSpace" } : {}
+  );
+};
+
+const countElementsUnder = (node) =>
+  collectElements(node, { stopAtSpaces: false, traverseElementChildren: false }).length;
+
+const getModelLabel = (model) => {
+  if (currentModelLabel) return currentModelLabel;
+  if (typeof model?.name === "string" && model.name.trim().length) return model.name;
+  if (typeof model?.modelID === "string" && model.modelID.trim().length) return model.modelID;
+  if (typeof model?.id === "string" && model.id.trim().length) return model.id;
+  return "IFC Model";
 };
 
 const buildObjectTree = async (model) => {
@@ -838,65 +906,58 @@ const buildObjectTree = async (model) => {
           const storeyTreeNodes = [];
 
           for (const storey of effectiveStoreys) {
-            const spaceNodes = uniqueByLocalId(
+            const storeySpaces = uniqueByLocalId(
               collectDescendants(storey, (node) => isCategory(node, "IfcSpace"))
             );
 
-            const assignedElements = new Set();
-            const spaceTreeNodes = [];
-
-            for (const space of spaceNodes) {
-              const spaceElements = collectElements(space, { stopAtSpaces: true });
-              spaceElements.forEach((element) => assignedElements.add(element.localId));
-
-              const children = await buildElementCategoryNodes(spaceElements, { allowEmpty: true }, resolvedModel);
-              const spaceLabel = formatSpatialLabel("IfcSpace", space.localId);
-              const spaceNode = createTreeNode(
-                spaceLabel,
-                children,
-                "🏠",
-                spaceElements.length,
-                { localId: space.localId, category: "IfcSpace" }
-              );
-              spaceTreeNodes.push(spaceNode);
+            let storeySpaceNodes = [];
+            for (const space of storeySpaces) {
+              storeySpaceNodes.push(await buildSpaceNode(space, resolvedModel));
             }
 
-            const storeyElements = collectElements(storey, { stopAtSpaces: true })
-              .filter((element) => !assignedElements.has(element.localId));
-            if (storeyElements.length) {
-              const children = await buildElementCategoryNodes(storeyElements, {}, resolvedModel);
-              const placeholderSpace = createTreeNode(
-                formatSpatialLabel("IfcSpace", null, "Unassigned"),
-                children,
-                "🏠",
-                storeyElements.length,
-                {}
-              );
-              spaceTreeNodes.push(placeholderSpace);
+            const { elements: storeyElements, usedRelations } = await getStoreyElements(storey, resolvedModel);
+            if (usedRelations) {
+              storeySpaceNodes = [];
             }
+            const elementCategoryNodes = await buildElementCategoryNodes(storeyElements, {}, resolvedModel);
 
-            if (spaceTreeNodes.length === 0) {
+            const storeyChildren = [];
+            if (storeySpaceNodes.length) {
+              storeyChildren.push(
+                createTreeNode(
+                  pluralizeIfcCategory("IfcSpace"),
+                  storeySpaceNodes,
+                  "🏠",
+                  storeySpaceNodes.length,
+                  {}
+                )
+              );
+            }
+            storeyChildren.push(...elementCategoryNodes);
+
+            if (storeyChildren.length === 0) {
               const children = await buildElementCategoryNodes([], { allowEmpty: true }, resolvedModel);
-              const placeholderSpace = createTreeNode(
-                formatSpatialLabel("IfcSpace", null, "Unassigned"),
-                children,
-                "🏠",
-                0,
-                {}
+              storeyChildren.push(
+                createTreeNode(
+                  pluralizeIfcCategory("IfcSpace"),
+                  [createTreeNode(formatSpatialLabel("IfcSpace", null, "Unassigned"), children, "🏠", 0, {})],
+                  "🏠",
+                  0,
+                  {}
+                )
               );
-              spaceTreeNodes.push(placeholderSpace);
             }
 
-            const storeyLabel = formatSpatialLabel(
+            const storeyLabel = formatSpatialLabelFromNode(
+              storey,
               "IfcBuildingStorey",
-              storey.localId,
               storey.localId == null ? "Unassigned" : ""
             );
             const storeyNode = createTreeNode(
               storeyLabel,
-              spaceTreeNodes,
+              storeyChildren,
               "🏢",
-              spaceTreeNodes.length,
+              countElementsUnder(storey),
               storey.localId != null ? { localId: storey.localId, category: "IfcBuildingStorey" } : {}
             );
             storeyTreeNodes.push(storeyNode);
@@ -910,16 +971,16 @@ const buildObjectTree = async (model) => {
             }
           }
 
-          const buildingLabel = formatSpatialLabel(
+          const buildingLabel = formatSpatialLabelFromNode(
+            building,
             "IfcBuilding",
-            building.localId,
             building.localId == null ? "Unassigned" : ""
           );
           const buildingNode = createTreeNode(
             buildingLabel,
             storeyTreeNodes,
             "🏗️",
-            storeyTreeNodes.length,
+            countElementsUnder(building),
             building.localId != null ? { localId: building.localId, category: "IfcBuilding" } : {}
           );
           buildingTreeNodes.push(buildingNode);
@@ -940,27 +1001,31 @@ const buildObjectTree = async (model) => {
           }
         }
 
-        const siteLabel = formatSpatialLabel("IfcSite", site.localId, site.localId == null ? "Unassigned" : "");
+        const siteLabel = formatSpatialLabelFromNode(
+          site,
+          "IfcSite",
+          site.localId == null ? "Unassigned" : ""
+        );
         const siteNode = createTreeNode(
           siteLabel,
           buildingTreeNodes,
           "🌍",
-          buildingTreeNodes.length,
+          countElementsUnder(site),
           site.localId != null ? { localId: site.localId, category: "IfcSite" } : {}
         );
         siteTreeNodes.push(siteNode);
       }
 
-      const projectLabel = formatSpatialLabel(
+      const projectLabel = formatSpatialLabelFromNode(
+        project,
         "IfcProject",
-        project.localId,
         project.localId == null ? "Unassigned" : ""
       );
       const projectNode = createTreeNode(
         projectLabel,
         siteTreeNodes,
         "🏁",
-        siteTreeNodes.length,
+        countElementsUnder(project),
         project.localId != null ? { localId: project.localId, category: "IfcProject" } : {}
       );
       rootNodes.push(projectNode);
@@ -971,9 +1036,27 @@ const buildObjectTree = async (model) => {
       return;
     }
 
+    const allSpaces = uniqueByLocalId(
+      collectDescendants(spatialRoot, (node) => isCategory(node, "IfcSpace"))
+    );
+    const spaceNodes = [];
+    for (const space of allSpaces) {
+      spaceNodes.push(await buildSpaceNode(space, resolvedModel));
+    }
+    const spacesBranch = spaceNodes.length
+      ? createTreeNode("Spaces", spaceNodes, "🏠", spaceNodes.length, {})
+      : null;
+
+    const fileRootChildren = [];
+    if (spacesBranch) fileRootChildren.push(spacesBranch);
+    fileRootChildren.push(...rootNodes);
+
+    const fileRootLabel = getModelLabel(resolvedModel);
+    const fileRootNode = createTreeNode(fileRootLabel, fileRootChildren, "📁", 0, {});
+
     const rootUl = document.createElement("ul");
     rootUl.className = "tree-node";
-    rootNodes.forEach(node => rootUl.appendChild(node));
+    rootUl.appendChild(fileRootNode);
 
     if (objectTreeContent) {
       objectTreeContent.innerHTML = "";
@@ -1014,6 +1097,24 @@ const collapseAllTreeNodes = () => {
       children.style.maxHeight = "0";
     }
   });
+  requestAnimationFrame(updateObjectTreeScrollbar);
+};
+
+const expandAllTreeNodes = () => {
+  if (!objectTreeContent) return;
+
+  const allItems = objectTreeContent.querySelectorAll(".tree-item");
+  allItems.forEach((item) => {
+    const header = item.querySelector(".tree-item-header");
+    const expandIcon = header?.querySelector(".tree-expand-icon");
+    const children = item.querySelector(".tree-children");
+    if (!children) return;
+
+    expandIcon?.classList.add("expanded");
+    children.classList.remove("collapsed");
+    children.style.maxHeight = `${children.scrollHeight}px`;
+  });
+
   requestAnimationFrame(updateObjectTreeScrollbar);
 };
 
@@ -1218,17 +1319,101 @@ const boot = async () => {
     axisRenderer.shadowMap.enabled = false;
     axisHelperContainer.appendChild(axisRenderer.domElement);
 
-    const axesHelper = new THREE.AxesHelper(2);
-    axisScene.add(axesHelper);
+    const axisGroup = new THREE.Group();
+    axisScene.add(axisGroup);
+
+    const axisLength = 2.4;
+    const axisRadius = 0.08;
+    const axisTipLength = 0.45;
+    const axisTipRadius = 0.18;
+
+    const makeAxis = (color, axis) => {
+      const group = new THREE.Group();
+      const rodGeom = new THREE.CylinderGeometry(axisRadius, axisRadius, axisLength, 12);
+      const tipGeom = new THREE.ConeGeometry(axisTipRadius, axisTipLength, 16);
+      const material = new THREE.MeshBasicMaterial({ color });
+
+      const rod = new THREE.Mesh(rodGeom, material);
+      const tip = new THREE.Mesh(tipGeom, material);
+
+      if (axis === "x") {
+        rod.rotation.z = Math.PI / 2;
+        rod.position.x = axisLength / 2;
+        tip.rotation.z = Math.PI / 2;
+        tip.position.x = axisLength + axisTipLength / 2;
+      } else if (axis === "y") {
+        rod.position.y = axisLength / 2;
+        tip.position.y = axisLength + axisTipLength / 2;
+      } else {
+        rod.rotation.x = Math.PI / 2;
+        rod.position.z = axisLength / 2;
+        tip.rotation.x = Math.PI / 2;
+        tip.position.z = axisLength + axisTipLength / 2;
+      }
+
+      group.add(rod, tip);
+      return group;
+    };
+
+    axisGroup.add(makeAxis("#ff3b30", "x"));
+    axisGroup.add(makeAxis("#34c759", "y"));
+    axisGroup.add(makeAxis("#0a84ff", "z"));
+
+    const makeAxisLabel = (text, color) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 128;
+      canvas.height = 128;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return null;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.font = "bold 72px 'Space Grotesk', sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = color;
+      ctx.strokeStyle = "rgba(0,0,0,0.6)";
+      ctx.lineWidth = 6;
+      ctx.strokeText(text, canvas.width / 2, canvas.height / 2);
+      ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.needsUpdate = true;
+      const material = new THREE.MeshBasicMaterial({
+        map: texture,
+        transparent: true,
+        depthTest: false,
+      });
+      const geometry = new THREE.PlaneGeometry(0.9, 0.9);
+      return new THREE.Mesh(geometry, material);
+    };
+
+    const axisLabelGroup = new THREE.Group();
+    axisScene.add(axisLabelGroup);
+
+    const xLabel = makeAxisLabel("X", "#ff3b30");
+    const yLabel = makeAxisLabel("Y", "#34c759");
+    const zLabel = makeAxisLabel("Z", "#0a84ff");
+
+    if (xLabel && yLabel && zLabel) {
+      xLabel.position.set(2.4, 0, 0);
+      yLabel.position.set(0, 2.4, 0);
+      zLabel.position.set(0, 0, 2.4);
+      axisLabelGroup.add(xLabel, yLabel, zLabel);
+    }
+
+    const axisQuat = new THREE.Quaternion();
 
     const updateAxisHelper = () => {
       const mainCam = world.camera && world.camera.three ? world.camera.three : null;
 
       if (mainCam) {
-        axesHelper.quaternion.copy(mainCam.quaternion);
+        mainCam.getWorldQuaternion(axisQuat);
+        axisGroup.quaternion.copy(axisQuat).invert();
       } else {
-        axesHelper.quaternion.identity();
+        axisGroup.quaternion.identity();
       }
+
+      axisLabelGroup.quaternion.copy(axisGroup.quaternion);
 
       axisCamera.position.set(5, 5, 5);
       axisCamera.lookAt(0, 0, 0);
@@ -1340,6 +1525,7 @@ const boot = async () => {
     showLoadingBar();
     try {
       logInfo(`Loading ${file.name}...`);
+      currentModelLabel = file.name;
 
       const withTimeout = (promise, timeoutMs, label) =>
         new Promise((resolve, reject) => {
@@ -1700,6 +1886,10 @@ const boot = async () => {
 
   objectTreeCollapse?.addEventListener("click", () => {
     collapseAllTreeNodes();
+  });
+
+  objectTreeExpand?.addEventListener("click", () => {
+    expandAllTreeNodes();
   });
 
   window.addEventListener("error", (event) => {
