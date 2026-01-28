@@ -6,6 +6,7 @@ const viewer = document.getElementById("viewer");
 const statusEl = document.getElementById("status");
 const fileInput = document.getElementById("ifc-input");
 const resetButton = document.getElementById("reset-camera");
+const projectionToggleButton = document.getElementById("projection-toggle");
 const debugSchema = document.getElementById("debug-schema");
 const debugModel = document.getElementById("debug-model");
 const debugError = document.getElementById("debug-error");
@@ -320,8 +321,9 @@ const highlightSelectedItem = async (model, localId, category = null) => {
       renderedFaces: FRAGS.RenderedFaces.ALL,
       opacity: 1,
       transparent: false,
-      depthTest: true,
-      depthWrite: true,
+      // Keep selection visible through other geometry.
+      depthTest: false,
+      depthWrite: false,
     });
 
     // Solid light blue selection
@@ -785,6 +787,84 @@ const buildElementCategoryNodes = async (elements, options = {}, model = null) =
   return categoryNodes;
 };
 
+const getModelElementIds = async (model) => {
+  if (!model) return [];
+
+  if (typeof model.getItemsIdsWithGeometry === "function") {
+    try {
+      const ids = await model.getItemsIdsWithGeometry();
+      if (Array.isArray(ids) && ids.length) return ids;
+    } catch (e) {
+      console.warn("Failed to get items with geometry IDs:", e);
+    }
+  }
+
+  if (typeof model.getItemsWithGeometry === "function") {
+    try {
+      const items = await model.getItemsWithGeometry();
+      if (Array.isArray(items) && items.length) {
+        if (typeof items[0] === "number") return items;
+        const ids = items
+          .map((item) => item?.localId ?? item?.id ?? item?.expressID ?? null)
+          .filter((id) => id != null);
+        if (ids.length) return ids;
+      }
+    } catch (e) {
+      console.warn("Failed to get items with geometry:", e);
+    }
+  }
+
+  if (typeof model.getLocalIds === "function") {
+    try {
+      const ids = await model.getLocalIds();
+      if (Array.isArray(ids) && ids.length) return ids;
+    } catch (e) {
+      console.warn("Failed to get local IDs:", e);
+    }
+  }
+
+  return [];
+};
+
+const getModelElements = async (model) => {
+  const ids = await getModelElementIds(model);
+  if (!ids.length) return [];
+
+  let categories = [];
+  if (typeof model?.getItemsCategories === "function") {
+    try {
+      categories = await model.getItemsCategories(ids);
+    } catch (e) {
+      console.warn("Failed to get item categories:", e);
+    }
+  }
+
+  const elements = ids.map((id, index) => ({
+    localId: id,
+    category: categories?.[index] ?? null,
+  }));
+
+  return uniqueByLocalId(elements).filter(
+    (element) => element?.localId != null && !isSpatialCategory(element?.category)
+  );
+};
+
+const buildElementsBranch = async (model) => {
+  const elements = await getModelElements(model);
+  if (!elements.length) return null;
+
+  const elementCategoryNodes = await buildElementCategoryNodes(elements, {}, model);
+  if (!elementCategoryNodes.length) return null;
+
+  return createTreeNode(
+    "Elements",
+    elementCategoryNodes,
+    "🧱",
+    elements.length,
+    {}
+  );
+};
+
 const buildPlaceholderChain = async (elements, model = null) => {
   const elementGroups = await buildElementCategoryNodes(elements, { allowEmpty: true }, model);
   if (!elementGroups.length) return [];
@@ -1047,8 +1127,11 @@ const buildObjectTree = async (model) => {
       ? createTreeNode("Spaces", spaceNodes, "🏠", spaceNodes.length, {})
       : null;
 
+    const elementsBranch = await buildElementsBranch(resolvedModel);
+
     const fileRootChildren = [];
     if (spacesBranch) fileRootChildren.push(spacesBranch);
+    if (elementsBranch) fileRootChildren.push(elementsBranch);
     fileRootChildren.push(...rootNodes);
 
     const fileRootLabel = getModelLabel(resolvedModel);
@@ -1177,6 +1260,10 @@ const fitCameraToModel = (camera, model) => {
   );
 };
 
+const projectionLabel = (projection) => (
+  projection === "Orthographic" ? "Parallel" : "Perspective"
+);
+
 const boot = async () => {
   if (!viewer) {
     showError("Viewer container not found.");
@@ -1201,6 +1288,17 @@ const boot = async () => {
   world.renderer = new OBC.SimpleRenderer(components, viewer);
   world.camera = new OBC.OrthoPerspectiveCamera(components);
   await world.camera.controls.setLookAt(12, 12, 12, 0, 0, 0);
+
+  const updateProjectionToggleLabel = () => {
+    if (!projectionToggleButton) return;
+    const current = world.camera?.projection?.current ?? "Perspective";
+    projectionToggleButton.textContent = `Projection: ${projectionLabel(current)}`;
+  };
+
+  updateProjectionToggleLabel();
+  world.camera?.projection?.onChanged?.add?.(() => {
+    updateProjectionToggleLabel();
+  });
 
   components.init();
   components.get(OBC.Grids).create(world);
@@ -1315,7 +1413,7 @@ const boot = async () => {
       axisHelperContainer.clientHeight || 100
     );
     axisRenderer.setPixelRatio(window.devicePixelRatio || 1);
-    axisRenderer.setClearColor(0x000000, 0.1);
+    axisRenderer.setClearColor(0x000000, 0);
     axisRenderer.shadowMap.enabled = false;
     axisHelperContainer.appendChild(axisRenderer.domElement);
 
@@ -1408,7 +1506,7 @@ const boot = async () => {
 
       if (mainCam) {
         mainCam.getWorldQuaternion(axisQuat);
-        axisGroup.quaternion.copy(axisQuat).invert();
+        axisGroup.quaternion.copy(axisQuat);
       } else {
         axisGroup.quaternion.identity();
       }
@@ -1790,6 +1888,18 @@ const boot = async () => {
 
   resetButton?.addEventListener("click", () => {
     world.camera.controls.setLookAt(12, 12, 12, 0, 0, 0);
+  });
+
+  projectionToggleButton?.addEventListener("click", async () => {
+    try {
+      if (world.camera?.projection?.toggle) {
+        await world.camera.projection.toggle();
+        updateProjectionToggleLabel();
+      }
+    } catch (error) {
+      console.error("Failed to toggle projection:", error);
+      showError(`Projection toggle failed: ${error.message || error}`);
+    }
   });
 
   const handleDrop = (event) => {
